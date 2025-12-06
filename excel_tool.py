@@ -17,7 +17,7 @@ def search_grade(professor_name):
     # 1. 資料讀取與合併
     try:
         # 找出所有符合 'grades_*.xlsx' 規則的檔案
-        all_files = glob.glob("grades_*.xlsx") 
+       all_files = glob.glob("*.csv")
         
         if not all_files:
             return ">> 錯誤：找不到任何 grades_*.xlsx 檔案。請確認它們在專案根目錄下。"
@@ -28,7 +28,7 @@ def search_grade(professor_name):
         
         for f in all_files:
             try:
-                df = pd.read_excel(f, header=0) 
+                df = pd.read_csv(f)
                 
                 # 清理欄位名稱前後的空白 (避免 Excel 格式問題)
                 df.columns = df.columns.str.strip() 
@@ -79,4 +79,5 @@ def search_grade(professor_name):
         return result_msg
 
     except Exception as e:
+
         return f"資料搜尋或格式化時發生錯誤：{e}"
