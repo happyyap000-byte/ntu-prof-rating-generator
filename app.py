@@ -3,10 +3,12 @@ import streamlit as st
 import crawlptt       # 爬蟲程式
 import analy          # PTT 評論分析程式
 import excel_tool     # Excel 成績查詢程式
+import crawlpttcontent # 匯入文章內容爬蟲
 import time 
 import requests 
 import pandas as pd
 import numpy as np
+import random
 
 # 網站標題與設定
 st.set_page_config(layout="centered")
@@ -22,9 +24,14 @@ with col_compare:
     professor_compare_input = st.text_input("輸入第二個教授名字 (比較對象，可選):", key="prof2")
 
 
+# 文件名稱：app.py (get_professor_review 函數內部)
+# 文件名稱：app.py (get_professor_review 函數內部)
+import random # <--- ⭐ 確保 app.py 頂部有此行
+
 def get_professor_review(professor_name):
     """
     執行爬蟲、分析、和 Excel 查詢，回傳顯示用的 dict 和原始數據 tuple。
+    同時加入了安全取樣邏輯，用於顯示隨機評論範例。
     """
     if not professor_name:
         return None, None
@@ -33,118 +40,147 @@ def get_professor_review(professor_name):
     
     # --- 1. 執行 PTT 爬蟲與分析 ---
     try:
-        crawlptt.crawl(professor_name) 
+        # 爬蟲現在必須回傳所有評論列表 (all_comments)
+        all_comments = crawlptt.crawl(professor_name) 
+        
+        # 爬取文章內容並儲存為 TXT
+        crawlpttcontent.crawlcontent(professor_name) 
+
+        # 分析數據 (回傳統計結果的 Tuple)
         ptt_result_tuple = analy.analy(professor_name)
         
+        # 檢查是否有分析結果 (例如：查無評論)
         if ptt_result_tuple is False:
-            ptt_data = {"total_count": 0, "sweet_rating": "無資料", "push_ratio_display": "N/A", "summary": "PTT NTUcourse 版查無相關評論數據。"}
+            # 即使分析無果，我們仍可以嘗試回傳成績數據（如果成績找到了的話）
+            # 但為了保持數據完整性，這裡依舊回傳 None/False 讓單一查詢顯示錯誤訊息
+            return None, False
+
+        # ------------------------------------------------
+        # ⭐ 關鍵：安全取樣邏輯
+        # ------------------------------------------------
+        if not all_comments:
+            sample_comments = [] # 評論為空，回傳空列表
         else:
-            total_count = ptt_result_tuple[1]
-            push_ratio = float(ptt_result_tuple[3])
-            sweet_ratio = float(ptt_result_tuple[5])
-            
-            if sweet_ratio > 0.6:
-                sweet_rating = "⭐️⭐️⭐️⭐️⭐️ (極甜)"
-            elif sweet_ratio > 0.3:
-                sweet_rating = "⭐️⭐️⭐️⭐️ (偏甜)"
-            else:
-                sweet_rating = "⭐️⭐️ (偏硬)"
-                
-            summary_text = f"【PTT 評論彙整】：根據 {total_count} 則評論，教授獲得約 {push_ratio*100:.0f}% 的正面評價（推）。在甜度方面，提及「甜」的比例約為 {sweet_ratio*100:.0f}%。"
-            
-            ptt_data = {
-                "total_count": total_count,
-                "sweet_rating": sweet_rating,
-                "push_ratio_display": f"{push_ratio*100:.2f}%",
-                "summary": summary_text
-            }
-
-    except Exception as e:
-        ptt_data = {"total_count": 0, "sweet_rating": "錯誤", "push_ratio_display": "N/A", "summary": f"PTT 爬蟲或分析失敗。錯誤：{e}"}
+            # 隨機選取 5 則評論作為範例 (如果評論數不足 5 則，則全部選取)
+            # 這是防止 random.sample 在評論數少於 k 時報錯的關鍵
+            sample_comments = random.sample(all_comments, min(20, len(all_comments)))
         
-    # --- 2. 執行 Excel 成績查詢 ---
-    excel_data_string = excel_tool.search_grade(professor_name)
-
-    # 3. 彙整結果
-    display_dict = {
-        "name": professor_name,
-        "sweetness": ptt_data['sweet_rating'],
-        "push_ratio_display": ptt_data['push_ratio_display'],
-        "total_count": ptt_data['total_count'],
-        "ptt_summary": ptt_data['summary'],
-        "excel_data": excel_data_string, # Excel 查詢的結果字串
-    }
-    
-    return display_dict, ptt_result_tuple
-
+        # --- 2. 執行 Excel 成績查詢 ---
+        grade_msg = excel_tool.search_grade(professor_name)
+        
+        # --- 3. 整理數據 ---
+        data_dict = {
+            "name": ptt_result_tuple[0],
+            "total_count": ptt_result_tuple[1],
+            "good_count": ptt_result_tuple[2],
+            "good_ratio": f"{ptt_result_tuple[3]*100:.1f}%",
+            "sweet_count": ptt_result_tuple[4],
+            "sweet_ratio": f"{ptt_result_tuple[5]*100:.1f}%",
+            "bad_count": ptt_result_tuple[6],
+            "bad_ratio": f"{ptt_result_tuple[7]*100:.1f}%",
+            "notsweet_count": ptt_result_tuple[8],
+            "notsweet_ratio": f"{ptt_result_tuple[9]*100:.1f}%",
+            "grade_msg": grade_msg,
+            "sample_comments": sample_comments # ⭐ 新增：傳遞隨機選取的評論
+        }
+        
+        return data_dict, ptt_result_tuple
+        
+    except Exception as e:
+        # 在開發階段，可以將 st.error 改為 st.exception 來顯示完整的錯誤堆棧
+        # st.error(f"查詢過程中發生錯誤: {e}")
+        return None, None
 
 def display_single_review(review_data):
-    """顯示單一教授的詳細結果"""
-    st.success("✅ 評價與成績生成完畢！")
-    
-    st.subheader(f"👨‍🏫 {review_data['name']} 教授綜合分析")
-    
-    # PTT 數據區域
-    st.markdown("##### PTT 評論數據分析")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="甜度 (推估分數大方程度)", value=review_data['sweetness']) 
-    with col2:
-        st.metric(label="正面評價比率 (推/讚)", value=review_data['push_ratio_display']) 
-    with col3:
-        st.metric(label="總評論數", value=review_data['total_count']) 
+    """
+    在 Streamlit 介面上顯示單一教授的詳細分析結果。
+    新增了部分評論範例顯示。
+    """
+    if not review_data:
+        st.error("❌ 查無相關資訊，請確認輸入是否正確，或爬蟲程式執行失敗。")
+        return
 
-    st.info(f"**📝 彙整懶人包:** {review_data['ptt_summary']}")
+    st.subheader(f"📊 『{review_data['name']}』教授評價彙整")
     
+    # 顯示核心數據
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric(label="總評價數", value=review_data['total_count'])
+    with col2:
+        st.metric(label="推 次數", value=review_data['good_count'], delta=review_data['good_ratio'])
+    with col3:
+        st.metric(label="甜 次數", value=review_data['sweet_count'], delta=review_data['sweet_ratio'])
+    with col4:
+        st.metric(label="不推 次數", value=review_data['bad_count'], delta=review_data['bad_ratio'], delta_color="inverse")
+    with col5:
+        st.metric(label="不甜 次數", value=review_data['notsweet_count'], delta=review_data['notsweet_ratio'], delta_color="inverse")
+        
     st.markdown("---")
     
-    # Excel 數據區域
-    st.markdown("##### 課程 A+ 比例數據 (Excel 查詢)")
-    st.code(review_data['excel_data'], language='text')
-
+    # ⭐ 新增：顯示部分評論
+    if review_data.get('sample_comments'): # 使用 .get() 確保安全取值
+        st.subheader("💬 部分評論範例 (前 20 則)")
+        # 遍歷前 5 則評論
+        for i, comment in enumerate(review_data['sample_comments'][:20]): 
+            # 確保評論非空
+            if comment.strip(): 
+                # 使用 Markdown 引用格式顯示評論
+                # 只顯示前 100 個字，避免單則評論過長佔據太多空間
+                st.markdown(f"> **{i+1}.** {comment[:100]}...") 
+    else:
+        st.info("查無 PTT 評論內容。")
+        
+    st.markdown("---")
+    
+    # 顯示成績數據
+    st.subheader("📝 歷史課程 A+ 比例成績")
+    st.text(review_data['grade_msg'])
+    
     st.markdown("---")
     st.caption("🌐 資訊來源：PTT NTUcourse 板爬蟲 & 自行上傳之 Excel 成績單")
+    st.success("📝 **文章原始內容已儲存**至應用程式根目錄下的 `articles/` 資料夾中。")
 
 
 def display_comparison(prof1_raw, prof2_raw):
-    """顯示兩位教授的比較表格"""
-    st.subheader("📊 教授評價數據比較")
+    """
+    生成兩個教授的比較表格。
+    """
+    labels = ["名稱", "總評價數", "推 次數", "推 比率", "甜 次數", "甜 比率", "不推 次數", "不推 比率", "不甜 次數", "不甜 比率"]
     
-    labels = [
-        "名稱:", "總評價數:", "推   次數:", "推   比率:",
-        "甜   次數:", "甜   比率:", "不推 次數:", "不推 比率:",
-        "不甜 次數:", "不甜 比率:"
-    ]
+    # 整理數據以便顯示 (將比率從浮點數轉為百分比字串)
+    def format_raw(raw_tuple):
+        if raw_tuple is False:
+            return ["查無評論"] * len(labels)
+        
+        formatted = list(raw_tuple)
+        # 格式化比率 (索引 3, 5, 7, 9)
+        for i in [3, 5, 7, 9]:
+            formatted[i] = f"{formatted[i]*100:.1f}%"
+        return formatted
+
+    prof1_formatted = format_raw(prof1_raw)
+    prof2_formatted = format_raw(prof2_raw)
+
+    # 建立 DataFrame
+    data = {'指標': labels}
+    data[prof1_formatted[0]] = prof1_formatted
+    data[prof2_formatted[0]] = prof2_formatted
     
-    # 將 tuple 轉換為列表
-    prof1_list = list(prof1_raw)
-    prof2_list = list(prof2_raw)
+    # 移除名稱列
+    data[prof1_formatted[0]].pop(0)
+    data[prof2_formatted[0]].pop(0)
+    data['指標'].pop(0)
     
-    # 將比率欄位轉換為百分比顯示
-    for i in [3, 5, 7, 9]:
-        if isinstance(prof1_list[i], (float, np.float64)):
-            prof1_list[i] = f"{prof1_list[i]*100:.2f}%"
-        if isinstance(prof2_list[i], (float, np.float64)):
-            prof2_list[i] = f"{prof2_list[i]*100:.2f}%"
+    df = pd.DataFrame(data)
+    df.set_index('指標', inplace=True)
     
-    data = {
-        "指標": labels,
-        prof1_list[0]: prof1_list,
-        prof2_list[0]: prof2_list,
-    }
-    
-    # 建立 DataFrame，並將第一欄作為索引
-    df = pd.DataFrame(data).set_index("指標")
-    
-    st.dataframe(df, use_container_width=True)
-    st.caption("數值：次數；比率：在總評論數中的佔比。")
-    st.markdown("---")
+    st.subheader("⚖️ 教授評價數據比較")
+    st.table(df)
 
 
-# --- 網站介面主要執行區 ---
-
+# --- 主執行區塊 ---
 if st.button("🔍 開始查詢或比較"):
-    
     prof1_name = professor_input.strip()
     prof2_name = professor_compare_input.strip()
 
@@ -163,28 +199,36 @@ if st.button("🔍 開始查詢或比較"):
 
         # --- 處理比較查詢 ---
         else:
-            with st.spinner(f"正在搜尋並分析 {prof1_name} 與 {prof2_name} 的評價數據..."):
-                # 取得第一個教授數據
-                prof1_data, prof1_raw = get_professor_review(prof1_name)
+            # 取得第一個教授數據
+            with st.spinner(f"正在搜尋並分析 {prof1_name} 的評價與成績..."):
+                 prof1_data, prof1_raw = get_professor_review(prof1_name)
                 
-                # 取得第二個教授數據
-                prof2_data, prof2_raw = get_professor_review(prof2_name)
+            # 取得第二個教授數據
+            with st.spinner(f"正在搜尋並分析 {prof2_name} 的評價與成績..."):
+                 prof2_data, prof2_raw = get_professor_review(prof2_name)
             
             st.success("✅ 數據獲取完畢！正在生成比較表。")
 
             # 檢查數據是否完整
-            if prof1_raw is False:
-                st.error(f"❌ 無法取得第一個教授 ({prof1_name}) 的 PTT 評論數據進行比較。")
-            
-            if prof2_raw is False:
-                st.error(f"❌ 無法取得第二個教授 ({prof2_name}) 的 PTT 評論數據進行比較。")
-            
-            # 如果兩邊都有數據，才顯示比較表
-            if prof1_raw and prof2_raw:
-                display_comparison(prof1_raw, prof2_raw)
-            
-            # 即使比較失敗，依然顯示第一個教授的詳細資訊
+            if prof1_raw is None or prof2_raw is None:
+                 st.error("❌ 至少有一位教授的查詢發生錯誤，無法進行比較。")
+            elif prof1_raw is False and prof2_raw is False:
+                 st.error("❌ 兩位教授皆查無 PTT 評論數據進行比較。")
+            elif prof1_raw is False:
+                 st.error(f"❌ 無法取得第一個教授 ({prof1_name}) 的 PTT 評論數據進行比較。")
+            elif prof2_raw is False:
+                 st.error(f"❌ 無法取得第二個教授 ({prof2_name}) 的 PTT 評論數據進行比較。")
+            else:
+                 display_comparison(prof1_raw, prof2_raw)
+                 
+            # 額外顯示第一個教授的成績資訊
             if prof1_data:
-                st.markdown("---")
-                st.subheader(f"✨ {prof1_name} 教授詳細數據 (主查詢)")
-                display_single_review(prof1_data)
+                st.markdown("---") # 分隔線
+                st.subheader(f"📝 『{prof1_name}』教授成績資訊 (主查詢)")
+                st.text(prof1_data['grade_msg'])
+            
+            # 顯示第二個教授的成績資訊  <-- 關鍵修改
+            if prof2_data:
+                st.markdown("---") # 分隔線
+                st.subheader(f"📝 『{prof2_name}』教授成績資訊 (比較對象)")
+                st.text(prof2_data['grade_msg'])
