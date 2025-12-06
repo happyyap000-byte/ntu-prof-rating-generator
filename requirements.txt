@@ -58,3 +58,8 @@ streamlit
 pandas
 #...其他套件 (若有)
 crawlptt  <-- 新增這行
+streamlit
+pandas
+requests
+beautifulsoup4
+openpyxl
